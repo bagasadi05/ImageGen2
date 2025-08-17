@@ -1,7 +1,17 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
-import { artStyles } from './constants';
+import { z } from 'zod';
+import { stylePresets, commonKeywords } from './constants';
+import type { StylePreset } from './constants';
 import { generateImage, generateKeywords, generateEnhancedPrompts } from './services/geminiService';
-import type { Prompt } from './types';
+import type { Prompt, GenerationProgress } from './types';
+
+// --- Zod Schemas for Validation ---
+const promptSchema = z.object({
+  prompt: z.string().min(1, 'Prompt cannot be empty.'),
+  negative_prompt: z.string().optional(),
+});
+const promptsSchema = z.array(promptSchema).min(1, "JSON array cannot be empty.");
+
 
 // --- Helper Components ---
 
@@ -53,12 +63,7 @@ interface PromptCardProps {
 const PromptCard: React.FC<PromptCardProps> = ({ promptData, onGenerate, onUpdatePrompt, index }) => {
     const [copiedSeed, setCopiedSeed] = useState(false);
     const [copiedMeta, setCopiedMeta] = useState(false);
-    const [title, setTitle] = useState(promptData.prompt);
     const [isMetaVisible, setIsMetaVisible] = useState(false);
-
-    useEffect(() => {
-        setTitle(promptData.prompt);
-    }, [promptData.prompt]);
     
     useEffect(() => {
         if(promptData.keywords && promptData.keywords.length > 0) {
@@ -75,12 +80,12 @@ const PromptCard: React.FC<PromptCardProps> = ({ promptData, onGenerate, onUpdat
     }, [promptData.seed]);
     
     const handleCopyMetadata = useCallback(() => {
-        const metadataString = `Title: ${title}\n\nKeywords: ${promptData.keywords?.join(', ')}`;
+        const metadataString = `Title: ${promptData.title || ''}\n\nDescription: ${promptData.description || ''}\n\nKeywords: ${promptData.keywords?.join(', ')}`;
         navigator.clipboard.writeText(metadataString).then(() => {
             setCopiedMeta(true);
             setTimeout(() => setCopiedMeta(false), 2500);
         });
-    }, [title, promptData.keywords]);
+    }, [promptData.title, promptData.description, promptData.keywords]);
 
 
     const handleDownload = () => {
@@ -96,6 +101,13 @@ const PromptCard: React.FC<PromptCardProps> = ({ promptData, onGenerate, onUpdat
     const handleRemoveKeyword = (keywordToRemove: string) => {
         const updatedKeywords = promptData.keywords?.filter(k => k !== keywordToRemove);
         onUpdatePrompt(index, { keywords: updatedKeywords });
+    };
+    
+    const handleAddCommonKeyword = (keywordToAdd: string) => {
+        const currentKeywords = promptData.keywords || [];
+        if (!currentKeywords.includes(keywordToAdd)) {
+            onUpdatePrompt(index, { keywords: [...currentKeywords, keywordToAdd] });
+        }
     };
 
     return (
@@ -160,7 +172,7 @@ const PromptCard: React.FC<PromptCardProps> = ({ promptData, onGenerate, onUpdat
             {(promptData.isGeneratingKeywords || promptData.keywords) && (
                 <div className="border-t border-slate-700 pt-4">
                     <button onClick={() => setIsMetaVisible(!isMetaVisible)} className="w-full flex justify-between items-center text-left">
-                        <h3 className="text-sm font-semibold text-teal-400">Metadata for Publication</h3>
+                        <h3 className="text-sm font-semibold text-teal-400">Stock Photo Metadata</h3>
                         <ChevronDownIcon className={`w-5 h-5 text-slate-400 transition-transform duration-300 ${isMetaVisible ? 'rotate-180' : ''}`} />
                     </button>
 
@@ -172,15 +184,26 @@ const PromptCard: React.FC<PromptCardProps> = ({ promptData, onGenerate, onUpdat
                                 <span>Generating keywords...</span>
                                 </div>
                             ) : (
-                                <div className="space-y-4">
+                                <div className="space-y-6">
                                     <div>
                                         <label htmlFor={`title-${index}`} className="block text-xs font-medium text-slate-400 mb-1.5">Title</label>
                                         <input 
                                             type="text"
                                             id={`title-${index}`}
-                                            value={title}
-                                            onChange={(e) => setTitle(e.target.value)}
+                                            value={promptData.title || ''}
+                                            onChange={(e) => onUpdatePrompt(index, { title: e.target.value })}
                                             className="w-full bg-slate-700/50 border border-slate-600 text-slate-200 rounded-lg p-2 text-sm focus:ring-2 focus:ring-purple-500 focus:border-purple-500 transition-colors"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label htmlFor={`description-${index}`} className="block text-xs font-medium text-slate-400 mb-1.5">Description</label>
+                                        <textarea
+                                            id={`description-${index}`}
+                                            rows={3}
+                                            value={promptData.description || ''}
+                                            onChange={(e) => onUpdatePrompt(index, { description: e.target.value })}
+                                            className="w-full bg-slate-700/50 border border-slate-600 text-slate-200 rounded-lg p-2 text-sm focus:ring-2 focus:ring-purple-500 focus:border-purple-500 transition-colors"
+                                            placeholder="Factual description of image content, e.g., 'A cute robot made of clay is holding a red skateboard on a white background.'"
                                         />
                                     </div>
                                     <div>
@@ -194,6 +217,22 @@ const PromptCard: React.FC<PromptCardProps> = ({ promptData, onGenerate, onUpdat
                                             ))}
                                         </div>
                                     </div>
+                                     <div>
+                                        <label className="block text-xs font-medium text-slate-400 mb-1.5">Common Keywords</label>
+                                        <div className="flex flex-wrap gap-2">
+                                            {commonKeywords.map(keyword => (
+                                                <button key={keyword} onClick={() => handleAddCommonKeyword(keyword)} className="bg-slate-700 hover:bg-slate-600 text-slate-300 text-xs font-medium px-2.5 py-1 rounded-full transition-colors">+ {keyword}</button>
+                                            ))}
+                                        </div>
+                                    </div>
+                                     <div className="bg-slate-900/50 p-3 rounded-lg border border-slate-700">
+                                        <h4 className="text-xs font-semibold text-slate-300 mb-2">Quality Control Checklist</h4>
+                                        <ul className="list-disc list-inside space-y-1 text-xs text-slate-400">
+                                            <li>Image meets 4MP minimum for stock sites. (Note: Standard generation may be lower).</li>
+                                            <li>Image is tagged as "Generative AI" on upload.</li>
+                                            <li>Image is free of any logos, text, or trademarks.</li>
+                                        </ul>
+                                    </div>
                                     <button
                                         onClick={handleCopyMetadata}
                                         className="w-full flex items-center justify-center gap-2 text-sm bg-slate-700 hover:bg-slate-600 text-white font-semibold py-2.5 px-3 rounded-lg transition-colors"
@@ -206,7 +245,7 @@ const PromptCard: React.FC<PromptCardProps> = ({ promptData, onGenerate, onUpdat
                                         ) : (
                                             <>
                                                 <ClipboardIcon className="w-5 h-5" />
-                                                <span>Copy Title & Keywords</span>
+                                                <span>Copy All Metadata</span>
                                             </>
                                         )}
                                     </button>
@@ -232,7 +271,23 @@ const App: React.FC = () => {
     const [jsonError, setJsonError] = useState<string | null>(null);
     const [selectedStyle, setSelectedStyle] = useState<string>('Otomatis');
     const [isGeneratingPrompts, setIsGeneratingPrompts] = useState<boolean>(false);
+    const generationAbortController = useRef<AbortController | null>(null);
+    const [generationProgress, setGenerationProgress] = useState<GenerationProgress>({
+        running: false, current: 0, total: 0, batch: 0, totalBatches: 0
+    });
 
+    const BATCH_SIZE = 3;
+
+    const handleStartOver = () => {
+        setPrompts([]);
+        setKeywords('');
+        setSelectedStyle('Otomatis');
+        setGenerationProgress({ running: false, current: 0, total: 0, batch: 0, totalBatches: 0 });
+        if (generationAbortController.current) {
+            generationAbortController.current.abort();
+            generationAbortController.current = null;
+        }
+    };
 
     const handleGeneratePrompts = useCallback(async () => {
         if (!keywords.trim() || isGeneratingPrompts) {
@@ -246,6 +301,8 @@ const App: React.FC = () => {
             const newPrompts: Prompt[] = generatedPrompts.map(p => ({
                 prompt: p,
                 negative_prompt: "blurry, low quality, watermark, signature, ugly, deformed, bad anatomy, text, logo, worst quality, lowres",
+                title: p,
+                description: '',
             }));
             setPrompts(newPrompts);
         } catch (error) {
@@ -265,20 +322,20 @@ const App: React.FC = () => {
 
         try {
             const parsed = JSON.parse(jsonInput);
+            const validationResult = promptsSchema.safeParse(parsed);
 
-            if (!Array.isArray(parsed)) {
-                throw new Error("The root of the JSON must be an array.");
+            if (!validationResult.success) {
+                // Format Zod errors into a user-friendly message
+                const formattedErrors = validationResult.error.issues.map(err => `[${err.path.join('.')}]: ${err.message}`).join('; ');
+                throw new Error(formattedErrors);
             }
-
-            const validPrompts: Prompt[] = parsed.map((item: any, index: number) => {
-                if (typeof item !== 'object' || item === null || typeof item.prompt !== 'string') {
-                    throw new Error(`Item at index ${index} is invalid. Each item must be an object with a "prompt" property.`);
-                }
-                return {
-                    prompt: item.prompt,
-                    negative_prompt: typeof item.negative_prompt === 'string' ? item.negative_prompt : "blurry, low quality, watermark, signature, ugly, deformed, bad anatomy, text, logo",
-                };
-            });
+            
+            const validPrompts: Prompt[] = validationResult.data.map(item => ({
+                prompt: item.prompt,
+                negative_prompt: item.negative_prompt || "blurry, low quality, watermark, signature, ugly, deformed, bad anatomy, text, logo",
+                title: item.prompt,
+                description: '',
+            }));
 
             setPrompts(validPrompts);
 
@@ -296,17 +353,20 @@ const App: React.FC = () => {
             return newPrompts;
         });
     }, []);
-
-    const handleGenerateSingleImage = useCallback(async (index: number) => {
+    
+    const handleGenerateSingleImage = useCallback(async (index: number, signal?: AbortSignal) => {
+        if (signal?.aborted) return;
         updatePromptState(index, { isGenerating: true, error: undefined, imageUrl: undefined, seed: undefined, keywords: undefined });
     
         try {
-            const result = await generateImage(prompts[index].prompt);
+            const result = await generateImage(prompts[index].prompt, '1:1', signal);
+            if (signal?.aborted) return;
             updatePromptState(index, { ...result, isGenerating: false, isGeneratingKeywords: true });
     
             // Now generate keywords
             try {
                 const keywords = await generateKeywords(prompts[index].prompt);
+                 if (signal?.aborted) return;
                 updatePromptState(index, { keywords, isGeneratingKeywords: false });
             } catch (keywordError) {
                 console.error("Keyword generation failed:", keywordError);
@@ -314,17 +374,118 @@ const App: React.FC = () => {
             }
     
         } catch (error) {
+            if (signal?.aborted) {
+                 updatePromptState(index, { isGenerating: false, error: "Generation cancelled." });
+                 return;
+            }
             const errorMessage = error instanceof Error ? error.message : 'An unknown error occurred.';
             updatePromptState(index, { isGenerating: false, error: errorMessage });
         }
     }, [prompts, updatePromptState]);
     
 
+    const handleGenerateAllImages = useCallback(async () => {
+        generationAbortController.current = new AbortController();
+        const signal = generationAbortController.current.signal;
+        const totalImages = prompts.length;
+        const totalBatches = Math.ceil(totalImages / BATCH_SIZE);
+
+        setGenerationProgress({ running: true, current: 0, total: totalImages, batch: 1, totalBatches });
+
+        for (let i = 0; i < totalImages; i += BATCH_SIZE) {
+            if (signal.aborted) {
+                console.log("Batch generation cancelled.");
+                break;
+            }
+            
+            const currentBatchNumber = (i / BATCH_SIZE) + 1;
+            setGenerationProgress(p => ({ ...p, batch: currentBatchNumber }));
+
+            const batch = prompts.slice(i, i + BATCH_SIZE);
+            const promises = batch.map((_, j) => 
+                handleGenerateSingleImage(i + j, signal).then(() => {
+                    if (!signal.aborted) {
+                        setGenerationProgress(p => ({...p, current: p.current + 1}));
+                    }
+                })
+            );
+            await Promise.all(promises);
+        }
+
+        setGenerationProgress({ running: false, current: 0, total: 0, batch: 0, totalBatches: 0 });
+
+    }, [prompts, handleGenerateSingleImage]);
+    
+    const handleCancelGeneration = () => {
+        if (generationAbortController.current) {
+            generationAbortController.current.abort();
+        }
+    }
+
     const handleKeyPress = (event: React.KeyboardEvent<HTMLInputElement>) => {
         if (event.key === 'Enter') {
             handleGeneratePrompts();
         }
     };
+    
+    const handleStyleSelect = (style: StylePreset) => {
+        setSelectedStyle(style.name);
+        const currentKeywords = keywords.split(',').map(k => k.trim()).filter(Boolean);
+        const newKeywordsSet = new Set([...currentKeywords, ...style.keywords]);
+        setKeywords(Array.from(newKeywordsSet).join(', '));
+    };
+
+    // --- Render Logic for Action Button Area ---
+    const renderActionArea = () => {
+        if (generationProgress.running) {
+            const percentage = Math.round((generationProgress.current / generationProgress.total) * 100);
+            return (
+                <div className="flex items-center gap-4 w-full">
+                    <div className="w-full bg-slate-700 rounded-full h-10 shadow-inner overflow-hidden relative flex items-center justify-center">
+                        <div 
+                            className="absolute top-0 left-0 h-full bg-gradient-to-r from-purple-600 to-indigo-600 transition-all duration-500"
+                            style={{ width: `${percentage}%` }}
+                        ></div>
+                        <span className="relative text-white font-semibold text-sm z-10">
+                            Generating... (Batch {generationProgress.batch}/{generationProgress.totalBatches}) - {generationProgress.current}/{generationProgress.total} Complete
+                        </span>
+                    </div>
+                    <button
+                        onClick={handleCancelGeneration}
+                        className="bg-red-600 hover:bg-red-500 text-white font-bold py-2.5 px-4 rounded-lg transition-colors whitespace-nowrap"
+                    >
+                        Cancel
+                    </button>
+                </div>
+            );
+        }
+        
+        if (prompts.length > 0) {
+             return (
+                 <button 
+                    onClick={handleGenerateAllImages}
+                    className="w-full flex items-center justify-center bg-gradient-to-r from-teal-500 to-cyan-500 hover:from-teal-400 hover:to-cyan-400 text-white font-bold py-3 px-4 rounded-lg transition-all duration-300 transform hover:scale-[1.02] focus:outline-none focus:ring-4 focus:ring-cyan-500/50 shadow-lg hover:shadow-cyan-500/30">
+                    Generate All Images (Batch)
+                 </button>
+            );
+        }
+        
+        return (
+             <button 
+                onClick={handleGeneratePrompts}
+                disabled={isGeneratingPrompts}
+                className="w-full flex items-center justify-center bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold py-3 px-4 rounded-lg transition-all duration-300 transform hover:scale-[1.02] focus:outline-none focus:ring-4 focus:ring-purple-500/50 shadow-lg hover:shadow-purple-500/30 disabled:opacity-50 disabled:cursor-not-allowed">
+                {isGeneratingPrompts ? (
+                    <>
+                        <Spinner className="!w-5 !h-5 !border-2 mr-2" />
+                        Generating Prompts...
+                    </>
+                ) : (
+                   'Generate 10 Prompts'
+                )}
+            </button>
+        );
+    }
 
     return (
         <div className="bg-slate-900/70 backdrop-blur-xl border border-slate-800/50 p-6 sm:p-8 rounded-2xl shadow-2xl shadow-black/30 w-full max-w-5xl">
@@ -360,11 +521,11 @@ const App: React.FC = () => {
             </div>
 
             {activeTab === 'generate' && (
-                <div className="space-y-4">
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="space-y-6">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div>
                             <label htmlFor="keywords" className="block text-sm font-medium text-slate-300 mb-2">
-                                Enter Keywords (comma-separated)
+                                Enter Keywords
                             </label>
                             <input 
                                 type="text" 
@@ -374,43 +535,31 @@ const App: React.FC = () => {
                                 onKeyUp={handleKeyPress}
                                 className="w-full bg-slate-800 border border-slate-700 text-slate-200 rounded-lg p-3 focus:ring-2 focus:ring-purple-500 focus:border-purple-500 transition-colors" 
                                 placeholder="e.g., fantasy dragon, castle"
+                                disabled={isGeneratingPrompts || prompts.length > 0 || generationProgress.running}
                             />
                         </div>
-                        <div>
-                            <label htmlFor="art-style" className="block text-sm font-medium text-slate-300 mb-2">
-                                Pilih Gaya Gambar
+                        <div className="space-y-2">
+                             <label className="block text-sm font-medium text-slate-300">
+                                Select a Style Preset
                             </label>
-                            <select 
-                                id="art-style"
-                                value={selectedStyle}
-                                onChange={(e) => setSelectedStyle(e.target.value)}
-                                className="w-full bg-slate-800 border border-slate-700 text-slate-200 rounded-lg p-3 focus:ring-2 focus:ring-purple-500 focus:border-purple-500 transition-colors appearance-none"
-                                style={{
-                                    backgroundImage: `url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%239ca3af' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e")`,
-                                    backgroundPosition: 'right 0.5rem center',
-                                    backgroundRepeat: 'no-repeat',
-                                    backgroundSize: '1.5em 1.5em',
-                                    paddingRight: '2.5rem',
-                                }}
-                            >
-                                <option>Otomatis</option>
-                                {artStyles.map(style => <option key={style} value={style}>{style}</option>)}
-                            </select>
+                            <div className="flex flex-wrap gap-2">
+                                 <button onClick={() => setSelectedStyle('Otomatis')} disabled={isGeneratingPrompts || prompts.length > 0 || generationProgress.running} className={`px-3 py-1.5 text-xs font-semibold rounded-full transition-all duration-200 ${selectedStyle === 'Otomatis' ? 'bg-purple-600 text-white ring-2 ring-offset-2 ring-offset-slate-900 ring-purple-500' : 'bg-slate-700 hover:bg-slate-600 text-slate-300'}`}>
+                                    Otomatis
+                                </button>
+                                {stylePresets.map(preset => (
+                                    <button 
+                                        key={preset.name} 
+                                        onClick={() => handleStyleSelect(preset)} 
+                                        disabled={isGeneratingPrompts || prompts.length > 0 || generationProgress.running}
+                                        className={`px-3 py-1.5 text-xs font-semibold text-white rounded-full transition-all duration-200 ${preset.color} ${selectedStyle === preset.name ? 'ring-2 ring-offset-2 ring-offset-slate-900 ring-white' : 'opacity-80 hover:opacity-100'}`}
+                                    >
+                                        {preset.name}
+                                    </button>
+                                ))}
+                            </div>
                         </div>
                     </div>
-                    <button 
-                        onClick={handleGeneratePrompts}
-                        disabled={isGeneratingPrompts}
-                        className="w-full flex items-center justify-center bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold py-3 px-4 rounded-lg transition-all duration-300 transform hover:scale-[1.02] focus:outline-none focus:ring-4 focus:ring-purple-500/50 shadow-lg hover:shadow-purple-500/30 disabled:opacity-50 disabled:cursor-not-allowed">
-                        {isGeneratingPrompts ? (
-                            <>
-                                <Spinner className="!w-5 !h-5 !border-2 mr-2" />
-                                Generating...
-                            </>
-                        ) : (
-                           'Generate 10 Prompts'
-                        )}
-                    </button>
+                    {renderActionArea()}
                 </div>
             )}
 
@@ -451,14 +600,22 @@ const App: React.FC = () => {
 
             {prompts.length > 0 && (
                 <div className="mt-8">
-                    <h2 className="text-lg font-semibold mb-4 text-slate-200">Generated Prompts</h2>
+                     <div className="flex justify-between items-center mb-4">
+                        <h2 className="text-lg font-semibold text-slate-200">Generated Prompts ({prompts.filter(p=>p.imageUrl).length}/{prompts.length})</h2>
+                        <button
+                         onClick={handleStartOver}
+                         className="text-sm text-slate-400 hover:text-white hover:bg-slate-700 px-3 py-1 rounded-lg transition-colors"
+                        >
+                            Start Over
+                        </button>
+                    </div>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                        {prompts.map((prompt, index) => (
                            <PromptCard 
                                 key={index}
                                 index={index} 
                                 promptData={prompt}
-                                onGenerate={() => handleGenerateSingleImage(index)}
+                                onGenerate={() => handleGenerateSingleImage(index, generationAbortController.current?.signal)}
                                 onUpdatePrompt={updatePromptState}
                             />
                        ))}

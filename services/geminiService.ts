@@ -9,19 +9,61 @@ if (!apiKey) {
 
 const ai = new GoogleGenAI({ apiKey: apiKey || '' });
 
-export const generateImage = async (prompt: string): Promise<{ imageUrl: string; seed: string }> => {
+const validAspectRatios = ["1:1", "16:9", "9:16", "4:3", "3:4"];
+type AspectRatio = "1:1" | "16:9" | "9:16" | "4:3" | "3:4";
+
+
+// --- Helper function for translation ---
+async function translateToEnglish(text: string): Promise<string> {
+    // Simple heuristic to check if translation is needed.
+    // This could be improved with a more robust language detection library.
+    const needsTranslation = /[à-ÿ]/.test(text) || /\b(dan|di|itu|sebuah|dengan)\b/i.test(text);
+
+    if (!needsTranslation) {
+        return text;
+    }
+
+    try {
+        const response = await ai.models.generateContent({
+            model: 'gemini-2.5-flash',
+            contents: `Translate the following creative prompt accurately to English for an image generation AI. Keep the core concepts and artistic direction intact. Do not add any conversational text, just return the translated prompt string. The prompt is: "${text}"`,
+            config: {
+                temperature: 0.2, // Lower temperature for more deterministic translation
+            }
+        });
+        const translatedText = response.text.trim();
+        console.log(`Translated prompt: "${text}" -> "${translatedText}"`);
+        return translatedText || text; // Fallback to original text if translation is empty
+    } catch (error) {
+        console.error("Translation failed, using original prompt.", error);
+        return text; // Return original text on translation failure
+    }
+}
+
+
+export const generateImage = async (prompt: string, aspectRatio: AspectRatio = '1:1', signal?: AbortSignal): Promise<{ imageUrl: string; seed: string }> => {
   if (!apiKey) {
     throw new Error("API Key is not configured. Please set the API_KEY environment variable.");
   }
   
+  if (signal?.aborted) {
+    throw new Error("Generation was cancelled by the user.");
+  }
+
+  const finalPrompt = await translateToEnglish(prompt);
+
+  if (signal?.aborted) {
+    throw new Error("Generation was cancelled by the user.");
+  }
+
   try {
     const response = await ai.models.generateImages({
       model: 'imagen-3.0-generate-002',
-      prompt: prompt,
+      prompt: finalPrompt,
       config: {
         numberOfImages: 1,
         outputMimeType: 'image/jpeg',
-        aspectRatio: '1:1',
+        aspectRatio: validAspectRatios.includes(aspectRatio) ? aspectRatio : '1:1',
       },
     });
 
@@ -38,6 +80,9 @@ export const generateImage = async (prompt: string): Promise<{ imageUrl: string;
     }
   } catch (error) {
     console.error("Error generating image with Gemini API:", error);
+    if (signal?.aborted) {
+      throw new Error("Generation was cancelled by the user.");
+    }
     if (error instanceof Error) {
         throw new Error(`${error.message}`);
     }
@@ -79,14 +124,21 @@ export const generateEnhancedPrompts = async (baseKeywords: string, artStyle: st
             ? 'Each prompt should have a varied, randomly selected artistic style (e.g., photorealistic, cinematic, 3d render, fantasy art).' 
             : `Every prompt must strictly incorporate the '${artStyle}' artistic style.`;
 
-        const systemInstruction = `You are an expert prompt engineer for advanced text-to-image AI models. Your task is to generate 10 highly detailed, commercially valuable, and artistically compelling image prompts.`;
+        const systemInstruction = `You are a world-class Art Director and expert prompt engineer for text-to-image AIs. Your mission is to craft 10 image prompts that will generate highly marketable, premium-quality stock photos suitable for platforms like Adobe Stock and Getty Images.`;
 
-        const userPrompt = `Based on the core keywords "${baseKeywords}", create 10 unique prompts.
+        const userPrompt = `Generate 10 unique, commercially-focused image prompts based on the keywords: "${baseKeywords}".
 ${styleInstruction}
-Each prompt must be a single, coherent sentence.
-Describe a clear subject, the environment, the composition (e.g., close-up, wide shot, rule of thirds), dramatic lighting (e.g., cinematic lighting, volumetric rays, golden hour), and a rich atmosphere.
-Focus on creating prompts that will produce stunning, high-quality images suitable for a premium stock photography marketplace like Adobe Stock.
-The final output must be a valid JSON array of 10 strings.`;
+
+**CRITICAL REQUIREMENTS FOR EACH PROMPT:**
+1.  **Commercial Concept:** The prompt must describe a clear, marketable concept (e.g., teamwork, innovation, tranquility, digital transformation).
+2.  **Detailed Composition:** Specify camera angles and composition techniques like 'wide-angle shot', 'macro detail', 'top-down view', 'rule of thirds composition', 'leading lines'. Crucially, many prompts should explicitly mention including **'negative space'** or **'copy space'** for text overlays.
+3.  **Professional Lighting:** Use descriptive lighting terms such as 'soft natural window light', 'dramatic cinematic lighting', 'golden hour glow', 'subtle studio lighting with soft shadows'.
+4.  **Atmosphere & Mood:** Define the mood, e.g., 'serene and peaceful atmosphere', 'energetic and vibrant mood', 'mysterious and moody ambiance'.
+5.  **Rich Detail & Realism:** Even in fantasy concepts, demand high detail, realistic textures, and sharp focus. Add phrases like 'hyperrealistic detail', '4K resolution', 'photorealistic'.
+
+**Format:**
+- Each prompt must be a single, powerful sentence.
+- The final output MUST be a valid JSON array containing exactly 10 string prompts.`;
 
         const response = await ai.models.generateContent({
             model: 'gemini-2.5-flash',
@@ -107,6 +159,10 @@ The final output must be a valid JSON array of 10 strings.`;
         const prompts = JSON.parse(jsonString);
 
         if (Array.isArray(prompts) && prompts.every(p => typeof p === 'string')) {
+            // Enforce the count server-side
+            if (prompts.length !== 10) {
+                throw new Error(`AI returned ${prompts.length} prompts instead of the required 10.`);
+            }
             return prompts;
         } else {
             throw new Error("API returned an invalid data structure for prompts.");
